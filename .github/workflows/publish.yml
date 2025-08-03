@@ -1,40 +1,165 @@
-name: 'publish'  # 工作流名称：发布流程
-# 来源：https://github.com/tauri-apps/tauri-action
-# 触发条件：当代码推送到 release 分支时触发
-on:
-  push:
-    branches:
-      - release
-    tags:
-      - 'v*'
+name: publish
+# 参考：https://github.com/tauri-apps/tauri-action
 
-# 此工作流会在 release 分支推送时执行以下操作：
-# 1. 创建/更新 GitHub Release
-# 2. 构建 Tauri 应用
-# 3. 将构建产物上传到 Release
+# 触发条件：当创建新的 Release 时触发工作流
+on:
+  release:
+    types: [published]  # 仅在正式发布 Release 时触发
 
 jobs:
-  publish-tauri:  # 发布 Tauri 应用的任务
-    permissions:
-      contents: write  # 授予写入仓库内容的权限（用于创建 Release）
-
-    # 构建策略：矩阵构建（同时构建多个平台）
-    strategy:
-      fail-fast: false  # 某平台失败不影响其他平台构建
-      matrix:
-        include:  # 定义四个构建环境
-          - platform: 'macos-latest'  # M1/M2 芯片 Mac
-            args: '--target aarch64-apple-darwin'
-          - platform: 'macos-latest'  # Intel 芯片 Mac
-            args: '--target x86_64-apple-darwin'
-          - platform: 'ubuntu-22.04'  # Linux 环境（Tauri v2 推荐）
-            args: ''
-          - platform: 'windows-latest'  # Windows 环境
-            args: ''
-
-    runs-on: ${{ matrix.platform }}  # 使用矩阵中定义的平台
-
+  # 创建 Release 占位符（第一步）
+  create-release:
+    name: Create Release Placeholder
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create_release.outputs.id }}
+    
     steps:
+      - name: Create Empty Release
+        id: create_release
+        uses: actions/create-release@v1
+        with:
+          # 使用发布的 Release 名称和标签
+          tag_name: ${{ github.ref_name }}
+          release_name: ${{ github.event.release.name }}
+          body: |
+            ⏳ 构建中，请稍候...
+            自动构建流程已启动，所有平台版本将在完成后自动上传。
+          draft: false
+          prerelease: ${{ github.event.release.prerelease }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 桌面平台构建任务
+  build-desktop:
+    needs: create-release  # 依赖第一步的 Release 创建
+    permissions:
+      contents: write  # 需要写入权限上传 Release 资产
+    
+    # 矩阵构建：同时构建多个桌面平台
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: 'macos-latest'
+            target: 'aarch64-apple-darwin'
+            artifact: 'macos_arm64'
+          - platform: 'macos-latest'
+            target: 'x86_64-apple-darwin'
+            artifact: 'macos_x64'
+          - platform: 'ubuntu-22.04'
+            target: ''
+            artifact: 'linux'
+          - platform: 'windows-latest'
+            target: ''
+            artifact: 'windows'
+
+    runs-on: ${{ matrix.platform }}
+    
+    steps:
+      - name: 检出代码库
+        uses: actions/checkout@v4
+
+      - name: 设置 Node.js 环境
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'  # 使用 Node.js 20 LTS 版本
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # 仅 macOS 需要安装多目标
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: 安装 Linux 依赖
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: 安装前端依赖
+        run: npm install  # 根据项目使用 yarn/pnpm 替换
+
+      - name: 构建桌面应用
+        run: |
+          # 根据平台执行构建命令
+          if [ "${{ matrix.platform }}" == "macos-latest" ]; then
+            npm run tauri build -- --target ${{ matrix.target }}
+          else
+            npm run tauri build
+          fi
+
+      - name: 上传桌面应用到 Release
+        uses: actions/upload-release-asset@v1
+        with:
+          # 使用第一步创建的 Release ID
+          release_id: ${{ needs.create-release.outputs.release_id }}
+          # 上传构建产物
+          asset_path: src-tauri/target/release/bundle/${{ 
+            matrix.platform == 'macos-latest' && 'osx' || 
+            matrix.platform == 'ubuntu-22.04' && 'linux' || 
+            matrix.platform == 'windows-latest' && 'msi' 
+          }}/your-app-name.${{ 
+            matrix.platform == 'macos-latest' && 'app.tar.gz' || 
+            matrix.platform == 'ubuntu-22.04' && 'deb' || 
+            matrix.platform == 'windows-latest' && 'msi' 
+          }}
+          asset_name: ${{ 
+            matrix.platform == 'macos-latest' && matrix.target == 'aarch64-apple-darwin' && 'YourApp_macOS_arm64.tar.gz' || 
+            matrix.platform == 'macos-latest' && matrix.target == 'x86_64-apple-darwin' && 'YourApp_macOS_x64.tar.gz' || 
+            matrix.platform == 'ubuntu-22.04' && 'YourApp_Linux.deb' || 
+            matrix.platform == 'windows-latest' && 'YourApp_Windows.msi' 
+          }}
+          asset_content_type: ${{ 
+            matrix.platform == 'macos-latest' && 'application/gzip' || 
+            matrix.platform == 'ubuntu-22.04' && 'application/vnd.debian.binary-package' || 
+            matrix.platform == 'windows-latest' && 'application/x-msi' 
+          }}
+
+  # Android 平台构建任务
+  build-android:
+    needs: create-release  # 依赖第一步的 Release 创建
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write  # 需要写入权限上传 Release 资产
+    
+    steps:
+      - name: 检出代码库
+        uses: actions/checkout@v4
+        
+      - name: 设置 Node.js 环境
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: 安装前端依赖
+        run: npm install
+          
+      - name: 设置 JDK 环境
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+          
+      - name: 设置 Android SDK
+        uses: android-actions/setup-android@v3
+          
+      - name: 安装 Rust Android 目标
+        run: |
+          rustup target add aarch64-linux-android
+          rustup target add armv7-linux-androideabi
+          rustup target add x86_64-linux-android
+          
+      - name: 安装 Android 构建依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lib32z1 openjdk-17-jdk
+          cargo install tauri-cli --version ^2.0.0
+          cargo install cargo-ndk
+          
+      - name: 构建 Android APK
+        run: |
+         steps:
       # 步骤1：检出代码库
       - uses: actions/checkout@v4
 
