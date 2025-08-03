@@ -6,7 +6,7 @@ on:
     branches:
       - release
     tags:
-      - 'app-v*'
+      - 'v*'
 
 # 此工作流会在 release 分支推送时执行以下操作：
 # 1. 创建/更新 GitHub Release
