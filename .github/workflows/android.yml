@@ -1,0 +1,100 @@
+name: android
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Setup JDK
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'zulu'
+        java-version: '17'
+
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+
+    - name: Install Android targets
+      run: |
+        yes | sdkmanager --licenses
+        sdkmanager "platforms;android-33" "build-tools;33.0.0"
+        sdkmanager "ndk;25.2.9519653" --channel=3
+        echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+        echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/25.2.9519653" >> $GITHUB_ENV
+
+    - name: Setup Rust targets
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: armv7-linux-androideabi, aarch64-linux-android, i686-linux-android, x86_64-linux-android
+
+    - name: Install Tauri CLI
+      run: cargo install tauri-cli
+
+    - name: Build Android APK
+      run: npx tauri android build
+      env:
+        ANDROID_HOME: ${{ env.ANDROID_HOME }}
+        ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
+        ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
+
+    - name: Upload APK artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: android-apks
+        path: src-tauri/target/**/*.apk
+
+  build-ios:
+    runs-on: macos-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: aarch64-apple-ios, x86_64-apple-ios
+
+    - name: Install Tauri CLI
+      run: cargo install tauri-cli
+
+    - name: Install CocoaPods
+      run: |
+        sudo gem install cocoapods
+        npx pod-install
+
+    - name: Build iOS app
+      run: npx tauri ios build
+      env:
+        MACOSX_DEPLOYMENT_TARGET: '13.0'
+
+    - name: Upload iOS artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ios-app
+        path: src-tauri/target/**/*.ipa
