@@ -1,6 +1,5 @@
 name: Tauri Mobile Builds
 
-# 配置为手动触发
 on:
   workflow_dispatch:
     inputs:
@@ -11,7 +10,6 @@ on:
 
 jobs:
   build-mobile:
-    # iOS 构建需要 macOS 环境
     runs-on: macos-latest
     
     steps:
@@ -21,8 +19,7 @@ jobs:
       - name: 设置 Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: 'npm'
+          node-version: 20  # 移除 cache 配置，避免检查锁文件
 
       - name: 设置 Rust
         uses: dtolnay/rust-toolchain@stable
@@ -32,7 +29,7 @@ jobs:
       - name: 安装依赖
         run: |
           npm install
-          # 安装 Tauri CLI (如果项目中未包含)
+          # 安装 Tauri CLI
           cargo install tauri-cli --version ${{ github.event.inputs.tauriVersion || 'latest' }}
 
       - name: 安装 Android 构建工具
@@ -40,14 +37,11 @@ jobs:
 
       - name: 构建安卓版本
         run: |
-          # 设置安卓环境变量
           export ANDROID_SDK_ROOT=$ANDROID_HOME
-          # 构建未签名的安卓 APK
           cargo tauri build --target aarch64-linux-android --android --no-sign
 
       - name: 构建 iOS 版本
         run: |
-          # 构建未签名的 iOS 应用
           cargo tauri build --ios --no-sign
 
       - name: 上传安卓构建产物
