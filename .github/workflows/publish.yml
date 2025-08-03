@@ -77,8 +77,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 使用 GitHub 自动生成的 token
         with:
-          tagName: app-v__VERSION__       # 自动将 __VERSION__ 替换为应用版本号
-          releaseName: 'App v__VERSION__' # Release 名称模板
+          tagName: v__VERSION__       # 自动将 __VERSION__ 替换为应用版本号
+          releaseName: 'v__VERSION__' # Release 名称模板
           releaseBody: 'See the assets to download this version and install.'  # Release 描述
           releaseDraft: true    # 创建为草稿 Release（需手动发布）
           prerelease: false     # 标记为非预发布版本
