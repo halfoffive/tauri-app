@@ -1,59 +1,71 @@
-name: Tauri Mobile Builds
+name: Build Tauri Mobile Apps
 
 on:
   workflow_dispatch:
-    inputs:
-      tauriVersion:
-        description: 'Tauri 版本 (可选)'
-        required: false
-        default: ''
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
-  build-mobile:
-    runs-on: macos-latest
-    
+  build-android:
+    runs-on: ubuntu-latest
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-
-      - name: 设置 Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20  # 移除 cache 配置，避免检查锁文件
-
-      - name: 设置 Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android, i686-linux-android
-
-      - name: 安装依赖
-        run: |
-          npm install
-          # 安装 Tauri CLI
-          cargo install tauri-cli --version ${{ github.event.inputs.tauriVersion || 'latest' }}
-
-      - name: 安装 Android 构建工具
-        uses: android-actions/setup-android@v3
-
-      - name: 构建安卓版本
-        run: |
-          export ANDROID_SDK_ROOT=$ANDROID_HOME
-          cargo tauri build --target aarch64-linux-android --android --no-sign
-
-      - name: 构建 iOS 版本
-        run: |
-          cargo tauri build --ios --no-sign
-
-      - name: 上传安卓构建产物
-        uses: actions/upload-artifact@v4
-        with:
-          name: tauri-android-build
-          path: |
-            src-tauri/target/aarch64-linux-android/release/bundle/android/*.apk
-            src-tauri/target/aarch64-linux-android/release/bundle/android/*.aab
-
-      - name: 上传 iOS 构建产物
-        uses: actions/upload-artifact@v4
-        with:
-          name: tauri-ios-build
-          path: src-tauri/target/x86_64-apple-ios/release/bundle/ios/*.app
+    - name: Checkout repository
+      uses: actions/checkout@v2
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+    - name: Set up Rust
+      uses: actions-rs/toolchain@0.1.8
+      with:
+        profile: minimal
+        toolchain: stable
+        override: true
+    - name: Install Android SDK
+      uses: android-actions/setup-sdk@v3
+      with:
+        android-version: '34'
+        java-version: '11'
+        ndk: true
+    - name: Set environment variables for Android build
+      run: |
+        echo "ANDROID_KEYSTORE_PATH=${{ secrets.ANDROID_KEYSTORE_PATH }}" >> $GITHUB_ENV
+        echo "ANDROID_KEYSTORE_PASSWORD=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" >> $GITHUB_ENV
+        echo "ANDROID_KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }}" >> $GITHUB_ENV
+        echo "ANDROID_KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}" >> $GITHUB_ENV
+    - name: Run tauri android init
+      run: tauri android init
+    - name: Run tauri android build
+      run: tauri android build
+  build-ios:
+    runs-on: macOS-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+    - name: Set up Rust
+      uses: actions-rs/toolchain@0.1.8
+      with:
+        profile: minimal
+        toolchain: stable
+        override: true
+    - name: Install Xcode
+      run: |
+        # Update Xcode to the latest version
+        sudo xcode-select --install
+        # Accept Xcode license
+        sudo xcodebuild -license accept
+    - name: Set environment variables for iOS build
+      run: |
+        echo "APPLE_DEVELOPER_ACCOUNT=${{ secrets.APPLE_DEVELOPER_ACCOUNT }}" >> $GITHUB_ENV
+        echo "APPLE_DEVELOPER_PASSWORD=${{ secrets.APPLE_DEVELOPER_PASSWORD }}" >> $GITHUB_ENV
+        echo "APPLE_PROVISIONING_PROFILE=${{ secrets.APPLE_PROVISIONING_PROFILE }}" >> $GITHUB_ENV
+    - name: Run tauri ios init
+      run: tauri ios init
+    - name: Run tauri ios build
+      run: tauri ios build
