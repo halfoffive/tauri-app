@@ -1,203 +1,96 @@
-name: publish
+name: 'publish'
 # 参考：https://github.com/tauri-apps/tauri-action
 
-# 触发条件：当创建新的 Release 时触发工作流
 on:
-  release:
-    types: [published]  # 仅在正式发布 Release 时触发
+  push:
+    branches:
+      - release
+  # 添加 workflow_dispatch 以支持手动触发
+  workflow_dispatch:
 
 jobs:
-  # 创建 Release 占位符（第一步）
-  create-release:
-    name: Create Release Placeholder
-    runs-on: ubuntu-latest
-    outputs:
-      release_id: ${{ steps.create_release.outputs.id }}
-    
-    steps:
-      - name: Create Empty Release
-        id: create_release
-        uses: actions/create-release@v1
-        with:
-          # 使用发布的 Release 名称和标签
-          tag_name: ${{ github.ref_name }}
-          release_name: ${{ github.event.release.name }}
-          body: |
-            ⏳ 构建中，请稍候...
-            自动构建流程已启动，所有平台版本将在完成后自动上传。
-          draft: false
-          prerelease: ${{ github.event.release.prerelease }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # 桌面平台构建任务
-  build-desktop:
-    needs: create-release  # 依赖第一步的 Release 创建
+  publish-tauri:
     permissions:
-      contents: write  # 需要写入权限上传 Release 资产
-    
-    # 矩阵构建：同时构建多个桌面平台
+      contents: write  # 允许写入发布内容
     strategy:
-      fail-fast: false
+      fail-fast: false  # 防止单个平台失败导致整个任务失败
       matrix:
         include:
-          - platform: 'macos-latest'
-            target: 'aarch64-apple-darwin'
-            artifact: 'macos_arm64'
-          - platform: 'macos-latest'
-            target: 'x86_64-apple-darwin'
-            artifact: 'macos_x64'
-          - platform: 'ubuntu-22.04'
-            target: ''
-            artifact: 'linux'
-          - platform: 'windows-latest'
-            target: ''
-            artifact: 'windows'
+          # macOS 平台配置
+          - platform: 'macos-latest'   # Apple Silicon (M1/M2)
+            args: '--target aarch64-apple-darwin'
+          - platform: 'macos-latest'   # Intel 芯片
+            args: '--target x86_64-apple-darwin'
+          
+          # Linux 平台配置
+          - platform: 'ubuntu-22.04'    # x86_64
+            args: ''
+          - platform: 'ubuntu-22.04'    # ARM64 支持
+            args: '--target aarch64-unknown-linux-gnu'
+          
+          # Windows 平台配置
+          - platform: 'windows-latest'  # x86_64
+            args: ''
 
     runs-on: ${{ matrix.platform }}
-    
     steps:
-      - name: 检出代码库
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4  # 检出代码
 
-      - name: 设置 Node.js 环境
+      # 设置 Node.js 环境
+      - name: 设置 Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'  # 使用 Node.js 20 LTS 版本
+          node-version: lts/*  # 使用最新的 LTS 版本
 
-      - name: 安装 Rust 工具链
+      # 安装 Rust 工具链
+      - name: 安装 Rust 稳定版
         uses: dtolnay/rust-toolchain@stable
         with:
-          # 仅 macOS 需要安装多目标
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          # 仅 macOS 需要安装多目标编译支持
+          targets: ${{ 
+            matrix.platform == 'macos-latest' && 
+            'aarch64-apple-darwin,x86_64-apple-darwin' || 
+            (matrix.args == '--target aarch64-unknown-linux-gnu' && 
+            'aarch64-unknown-linux-gnu' || '') 
+          }}
 
-      - name: 安装 Linux 依赖
-        if: matrix.platform == 'ubuntu-22.04'
+      # Linux 系统依赖安装（包括 ARM64 支持）
+      - name: 安装 Linux 依赖 (Ubuntu)
+        if: startsWith(matrix.platform, 'ubuntu')  # 仅限 Ubuntu 平台
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-
-      - name: 安装前端依赖
-        run: npm install  # 根据项目使用 yarn/pnpm 替换
-
-      - name: 构建桌面应用
-        run: |
-          # 根据平台执行构建命令
-          if [ "${{ matrix.platform }}" == "macos-latest" ]; then
-            npm run tauri build -- --target ${{ matrix.target }}
-          else
-            npm run tauri build
+          # 基础依赖
+          sudo apt-get install -y libwebkit2gtk-4.0-dev libwebkit2gtk-4.1-dev \
+                                 libappindicator3-dev librsvg2-dev patchelf
+          
+          # 添加 ARM64 交叉编译支持
+          if [ "${{ matrix.args }}" = "--target aarch64-unknown-linux-gnu" ]; then
+            sudo dpkg --add-architecture arm64
+            sudo apt-get update
+            sudo apt-get install -y \
+              gcc-aarch64-linux-gnu \
+              libwebkit2gtk-4.0-dev:arm64 \
+              libgtk-3-dev:arm64 \
+              librsvg2-dev:arm64
           fi
 
-      - name: 上传桌面应用到 Release
-        uses: actions/upload-release-asset@v1
-        with:
-          # 使用第一步创建的 Release ID
-          release_id: ${{ needs.create-release.outputs.release_id }}
-          # 上传构建产物
-          asset_path: src-tauri/target/release/bundle/${{ 
-            matrix.platform == 'macos-latest' && 'osx' || 
-            matrix.platform == 'ubuntu-22.04' && 'linux' || 
-            matrix.platform == 'windows-latest' && 'msi' 
-          }}/your-app-name.${{ 
-            matrix.platform == 'macos-latest' && 'app.tar.gz' || 
-            matrix.platform == 'ubuntu-22.04' && 'deb' || 
-            matrix.platform == 'windows-latest' && 'msi' 
-          }}
-          asset_name: ${{ 
-            matrix.platform == 'macos-latest' && matrix.target == 'aarch64-apple-darwin' && 'YourApp_macOS_arm64.tar.gz' || 
-            matrix.platform == 'macos-latest' && matrix.target == 'x86_64-apple-darwin' && 'YourApp_macOS_x64.tar.gz' || 
-            matrix.platform == 'ubuntu-22.04' && 'YourApp_Linux.deb' || 
-            matrix.platform == 'windows-latest' && 'YourApp_Windows.msi' 
-          }}
-          asset_content_type: ${{ 
-            matrix.platform == 'macos-latest' && 'application/gzip' || 
-            matrix.platform == 'ubuntu-22.04' && 'application/vnd.debian.binary-package' || 
-            matrix.platform == 'windows-latest' && 'application/x-msi' 
-          }}
+      # 添加 ARM64 目标（仅限 Linux ARM64 构建）
+      - name: 添加 Rust ARM64 目标
+        if: matrix.args == '--target aarch64-unknown-linux-gnu'
+        run: rustup target add aarch64-unknown-linux-gnu
 
-  # Android 平台构建任务
-  build-android:
-    needs: create-release  # 依赖第一步的 Release 创建
-    runs-on: ubuntu-22.04
-    permissions:
-      contents: write  # 需要写入权限上传 Release 资产
-    
-    steps:
-      - name: 检出代码库
-        uses: actions/checkout@v4
-        
-      - name: 设置 Node.js 环境
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          
+      # 安装前端依赖
       - name: 安装前端依赖
-        run: npm install
-          
-      - name: 设置 JDK 环境
-        uses: actions/setup-java@v3
-        with:
-          distribution: 'zulu'
-          java-version: '17'
-          
-      - name: 设置 Android SDK
-        uses: android-actions/setup-android@v3
-          
-      - name: 安装 Rust Android 目标
-        run: |
-          rustup target add aarch64-linux-android
-          rustup target add armv7-linux-androideabi
-          rustup target add x86_64-linux-android
-          
-      - name: 安装 Android 构建依赖
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y lib32z1 openjdk-17-jdk
-          cargo install tauri-cli --version ^2.0.0
-          cargo install cargo-ndk
-          
-      - name: 构建 Android APK
-        run: |
-         steps:
-      # 步骤1：检出代码库
-      - uses: actions/checkout@v4
+        run: yarn install  # 根据实际需要替换为 npm/pnpm/bun
 
-      # 步骤2：设置 Node.js 环境
-      - name: setup node
-        uses: actions/setup-node@v4
-        with:
-          node-version: lts/*  # 使用最新的 LTS 版本 Node.js
-
-      # 步骤3：安装 Rust 稳定版工具链
-      - name: install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          # 仅 macOS 需要安装双架构编译目标，其他平台留空加速构建
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
-
-      # 步骤4（仅 Ubuntu）：安装 Linux 系统依赖
-      - name: install dependencies (ubuntu only)
-        if: matrix.platform == 'ubuntu-22.04'  # 仅在 Ubuntu 平台执行
-        run: |
-          sudo apt-get update
-          # 安装 Tauri 所需的 GTK 和系统库
-          sudo apt-get install -y libwebkit2gtk-4.0-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-        # 注意：webkitgtk 4.0 对应 Tauri v1，4.1 对应 Tauri v2
-        # 可根据实际使用的 Tauri 版本移除不需要的依赖加速构建
-
-      # 步骤5：安装前端依赖
-      - name: install frontend dependencies
-        run: npm install  # 根据项目实际使用的包管理器替换为 npm/pnpm/bun
-
-      # 步骤6：使用 Tauri 官方 Action 构建应用并发布
+      # Tauri 构建和发布步骤
       - uses: tauri-apps/tauri-action@v0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 自动使用 GitHub 令牌
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 自动使用 GitHub Token
         with:
-          tagName: app-v__VERSION__       # 自动将 __VERSION__ 替换为应用版本号
-          releaseName: 'App v__VERSION__' # Release 标题
-          releaseBody: 'See the assets to download this version and install.'  # Release 描述
-          releaseDraft: true     # 创建为草稿 Release（需手动发布）
-          prerelease: false      # 非预览版
-          args: ${{ matrix.args }}  # 传递平台特定的构建参数
+          tagName: app-v__VERSION__    # 自动替换为应用版本
+          releaseName: '应用 v__VERSION__'
+          releaseBody: '请下载附件安装此版本'
+          releaseDraft: true           # 创建为草稿版
+          prerelease: false            # 非预发布版
+          args: ${{ matrix.args }}     # 传递平台参数
