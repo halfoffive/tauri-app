@@ -2,95 +2,81 @@ name: 'publish'
 # 参考：https://github.com/tauri-apps/tauri-action
 
 on:
+  # 支持两种触发方式：
+  # 1. 当代码推送到 release 分支时自动触发
+  # 2. 在 GitHub Actions 页面手动触发 (workflow_dispatch)
   push:
     branches:
       - release
-  # 添加 workflow_dispatch 以支持手动触发
-  workflow_dispatch:
+  workflow_dispatch:  # 添加手动运行支持
+
+# 此工作流用于构建 Tauri 应用并创建 GitHub 发布
+# 包含多平台构建策略：macOS(ARM/Intel)、Ubuntu、Windows
 
 jobs:
   publish-tauri:
     permissions:
-      contents: write  # 允许写入发布内容
+      contents: write  # 允许写入内容（创建发布和上传产物）
+    
+    # 多平台构建策略
     strategy:
-      fail-fast: false  # 防止单个平台失败导致整个任务失败
+      fail-fast: false  # 某个平台失败不影响其他平台
       matrix:
         include:
-          # macOS 平台配置
-          - platform: 'macos-latest'   # Apple Silicon (M1/M2)
+          - platform: 'macos-latest'   # ARM 架构 Mac (M1及以上)
             args: '--target aarch64-apple-darwin'
-          - platform: 'macos-latest'   # Intel 芯片
+          - platform: 'macos-latest'   # Intel 架构 Mac
             args: '--target x86_64-apple-darwin'
-          
-          # Linux 平台配置
-          - platform: 'ubuntu-22.04'    # x86_64
+          - platform: 'ubuntu-22.04'   # Linux 构建 (Tauri v2)
             args: ''
-          - platform: 'ubuntu-22.04'    # ARM64 支持
-            args: '--target aarch64-unknown-linux-gnu'
-          
-          # Windows 平台配置
-          - platform: 'windows-latest'  # x86_64
+          - platform: 'windows-latest' # Windows 构建
             args: ''
 
+    # 使用矩阵中定义的平台
     runs-on: ${{ matrix.platform }}
+    
     steps:
-      - uses: actions/checkout@v4  # 检出代码
+      # 步骤1：检出代码库
+      - uses: actions/checkout@v4
 
-      # 设置 Node.js 环境
-      - name: 设置 Node.js
+      # 步骤2：设置 Node.js 环境
+      - name: 安装 Node.js
         uses: actions/setup-node@v4
         with:
           node-version: lts/*  # 使用最新的 LTS 版本
 
-      # 安装 Rust 工具链
-      - name: 安装 Rust 稳定版
+      # 步骤3：安装 Rust 稳定版
+      - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          # 仅 macOS 需要安装多目标编译支持
-          targets: ${{ 
-            matrix.platform == 'macos-latest' && 
-            'aarch64-apple-darwin,x86_64-apple-darwin' || 
-            (matrix.args == '--target aarch64-unknown-linux-gnu' && 
-            'aarch64-unknown-linux-gnu' || '') 
-          }}
+          # 仅 macOS 需要安装多目标编译工具链
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
-      # Linux 系统依赖安装（包括 ARM64 支持）
-      - name: 安装 Linux 依赖 (Ubuntu)
-        if: startsWith(matrix.platform, 'ubuntu')  # 仅限 Ubuntu 平台
+      # 步骤4：Ubuntu 专属依赖安装
+      - name: 安装 Linux 依赖 (仅 Ubuntu)
+        if: matrix.platform == 'ubuntu-22.04'  # 仅在该平台执行
         run: |
           sudo apt-get update
-          # 基础依赖
-          sudo apt-get install -y libwebkit2gtk-4.0-dev libwebkit2gtk-4.1-dev \
-                                 libappindicator3-dev librsvg2-dev patchelf
-          
-          # 添加 ARM64 交叉编译支持
-          if [ "${{ matrix.args }}" = "--target aarch64-unknown-linux-gnu" ]; then
-            sudo dpkg --add-architecture arm64
-            sudo apt-get update
-            sudo apt-get install -y \
-              gcc-aarch64-linux-gnu \
-              libwebkit2gtk-4.0-dev:arm64 \
-              libgtk-3-dev:arm64 \
-              librsvg2-dev:arm64
-          fi
+          # 安装 Tauri 所需的 Linux 依赖
+          sudo apt-get install -y \
+            libwebkit2gtk-4.0-dev \  # Tauri v1 需要
+            libwebkit2gtk-4.1-dev \  # Tauri v2 需要
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
 
-      # 添加 ARM64 目标（仅限 Linux ARM64 构建）
-      - name: 添加 Rust ARM64 目标
-        if: matrix.args == '--target aarch64-unknown-linux-gnu'
-        run: rustup target add aarch64-unknown-linux-gnu
-
-      # 安装前端依赖
+      # 步骤5：安装前端依赖
       - name: 安装前端依赖
-        run: yarn install  # 根据实际需要替换为 npm/pnpm/bun
+        run: npm install  # 可根据需要改为 npm/pnpm/bun/yarn
 
-      # Tauri 构建和发布步骤
+      # 步骤6：使用 Tauri 官方 Action 构建和发布
       - uses: tauri-apps/tauri-action@v0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 自动使用 GitHub Token
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 使用自动生成的令牌
         with:
-          tagName: app-v__VERSION__    # 自动替换为应用版本
-          releaseName: '应用 v__VERSION__'
-          releaseBody: '请下载附件安装此版本'
-          releaseDraft: true           # 创建为草稿版
-          prerelease: false            # 非预发布版
-          args: ${{ matrix.args }}     # 传递平台参数
+          tagName: v__VERSION__     # 自动替换 __VERSION__ 为应用版本
+          releaseName: 'v__VERSION__' # 发布标题
+          releaseBody: '请下载下方资产文件安装应用' # 发布说明
+          releaseDraft: true    # 创建为草稿（需手动发布）
+          prerelease: false     # 非预览版
+          args: ${{ matrix.args }}  # 传递平台特定构建参数
