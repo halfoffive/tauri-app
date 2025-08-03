@@ -1,4 +1,4 @@
-name: 'publish-desktop'  # 工作流名称：发布流程
+name: 'publish'  # 工作流名称：发布流程
 # 来源：https://github.com/tauri-apps/tauri-action
 # 触发条件：当代码推送到 release 分支时触发
 on:
@@ -61,7 +61,7 @@ jobs:
 
       # 步骤5：安装前端依赖
       - name: install frontend dependencies
-        run: yarn install  # 根据项目实际使用的包管理器替换为 npm/pnpm/bun
+        run: npm install  # 根据项目实际使用的包管理器替换为 npm/pnpm/bun
 
       # 步骤6：使用 Tauri 官方 Action 构建应用并发布
       - uses: tauri-apps/tauri-action@v0
