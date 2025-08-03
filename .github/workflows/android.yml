@@ -1,101 +1,65 @@
-name: android
+name: Tauri Mobile Builds
 
+# 配置为手动触发
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    inputs:
+      tauriVersion:
+        description: 'Tauri 版本 (可选)'
+        required: false
+        default: ''
 
 jobs:
-  build-android:
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: 20
-        cache: 'npm'
-
-    - name: Install dependencies
-      run: npm ci
-
-    - name: Setup JDK
-      uses: actions/setup-java@v4
-      with:
-        distribution: 'zulu'
-        java-version: '17'
-
-    - name: Setup Android SDK
-      uses: android-actions/setup-android@v3
-
-    - name: Install Android targets
-      run: |
-        yes | sdkmanager --licenses
-        sdkmanager "platforms;android-33" "build-tools;33.0.0"
-        sdkmanager "ndk;25.2.9519653" --channel=3
-        echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
-        echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/25.2.9519653" >> $GITHUB_ENV
-
-    - name: Setup Rust targets
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        targets: armv7-linux-androideabi, aarch64-linux-android, i686-linux-android, x86_64-linux-android
-
-    - name: Install Tauri CLI
-      run: cargo install tauri-cli
-
-    - name: Build Android APK
-      run: npx tauri android build
-      env:
-        ANDROID_HOME: ${{ env.ANDROID_HOME }}
-        ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
-        ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
-
-    - name: Upload APK artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: android-apks
-        path: src-tauri/target/**/*.apk
-
-  build-ios:
+  build-mobile:
+    # iOS 构建需要 macOS 环境
     runs-on: macos-latest
+    
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: 检出代码
+        uses: actions/checkout@v4
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: 20
-        cache: 'npm'
+      - name: 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
 
-    - name: Install dependencies
-      run: npm ci
+      - name: 设置 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android, i686-linux-android
 
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        targets: aarch64-apple-ios, x86_64-apple-ios
+      - name: 安装依赖
+        run: |
+          npm install
+          # 安装 Tauri CLI (如果项目中未包含)
+          cargo install tauri-cli --version ${{ github.event.inputs.tauriVersion || 'latest' }}
 
-    - name: Install Tauri CLI
-      run: cargo install tauri-cli
+      - name: 安装 Android 构建工具
+        uses: android-actions/setup-android@v3
 
-    - name: Install CocoaPods
-      run: |
-        sudo gem install cocoapods
-        npx pod-install
+      - name: 构建安卓版本
+        run: |
+          # 设置安卓环境变量
+          export ANDROID_SDK_ROOT=$ANDROID_HOME
+          # 构建未签名的安卓 APK
+          cargo tauri build --target aarch64-linux-android --android --no-sign
 
-    - name: Build iOS app
-      run: npx tauri ios build
-      env:
-        MACOSX_DEPLOYMENT_TARGET: '13.0'
+      - name: 构建 iOS 版本
+        run: |
+          # 构建未签名的 iOS 应用
+          cargo tauri build --ios --no-sign
 
-    - name: Upload iOS artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: ios-app
-        path: src-tauri/target/**/*.ipa
+      - name: 上传安卓构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-android-build
+          path: |
+            src-tauri/target/aarch64-linux-android/release/bundle/android/*.apk
+            src-tauri/target/aarch64-linux-android/release/bundle/android/*.aab
+
+      - name: 上传 iOS 构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-ios-build
+          path: src-tauri/target/x86_64-apple-ios/release/bundle/ios/*.app
