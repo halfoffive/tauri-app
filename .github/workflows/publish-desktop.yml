@@ -1,0 +1,76 @@
+name: 'publish-desktop'  # 工作流名称：发布流程
+# 来源：https://github.com/tauri-apps/tauri-action
+# 触发条件：当代码推送到 release 分支时触发
+on:
+  push:
+    branches:
+      - release
+
+# 此工作流会在 release 分支推送时执行以下操作：
+# 1. 创建/更新 GitHub Release
+# 2. 构建 Tauri 应用
+# 3. 将构建产物上传到 Release
+
+jobs:
+  publish-tauri:  # 发布 Tauri 应用的任务
+    permissions:
+      contents: write  # 授予写入仓库内容的权限（用于创建 Release）
+
+    # 构建策略：矩阵构建（同时构建多个平台）
+    strategy:
+      fail-fast: false  # 某平台失败不影响其他平台构建
+      matrix:
+        include:  # 定义四个构建环境
+          - platform: 'macos-latest'  # M1/M2 芯片 Mac
+            args: '--target aarch64-apple-darwin'
+          - platform: 'macos-latest'  # Intel 芯片 Mac
+            args: '--target x86_64-apple-darwin'
+          - platform: 'ubuntu-22.04'  # Linux 环境（Tauri v2 推荐）
+            args: ''
+          - platform: 'windows-latest'  # Windows 环境
+            args: ''
+
+    runs-on: ${{ matrix.platform }}  # 使用矩阵中定义的平台
+
+    steps:
+      # 步骤1：检出代码库
+      - uses: actions/checkout@v4
+
+      # 步骤2：设置 Node.js 环境
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*  # 使用最新的 LTS 版本 Node.js
+
+      # 步骤3：安装 Rust 稳定版工具链
+      - name: install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # 仅 macOS 需要安装双架构编译目标，其他平台留空加速构建
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      # 步骤4（仅 Ubuntu）：安装 Linux 系统依赖
+      - name: install dependencies (ubuntu only)
+        if: matrix.platform == 'ubuntu-22.04'  # 仅在 Ubuntu 平台执行
+        run: |
+          sudo apt-get update
+          # 安装 Tauri 所需的 GTK 和系统库
+          sudo apt-get install -y libwebkit2gtk-4.0-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+        # 注意：webkitgtk 4.0 对应 Tauri v1，4.1 对应 Tauri v2
+        # 可根据实际使用的 Tauri 版本移除不需要的依赖加速构建
+
+      # 步骤5：安装前端依赖
+      - name: install frontend dependencies
+        run: yarn install  # 根据项目实际使用的包管理器替换为 npm/pnpm/bun
+
+      # 步骤6：使用 Tauri 官方 Action 构建应用并发布
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 自动使用 GitHub 令牌
+        with:
+          tagName: app-v__VERSION__       # 自动将 __VERSION__ 替换为应用版本号
+          releaseName: 'App v__VERSION__' # Release 标题
+          releaseBody: 'See the assets to download this version and install.'  # Release 描述
+          releaseDraft: true     # 创建为草稿 Release（需手动发布）
+          prerelease: false      # 非预览版
+          args: ${{ matrix.args }}  # 传递平台特定的构建参数
